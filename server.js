@@ -219,47 +219,44 @@ app.post('/book', async (req, res) => {
     res.status(500).json({ ok: false, error: 'booking_failed' });
   }
 });
-// Cancelar cita por código (o eventId)
+// Cancelar cita SOLO por código
 app.post('/cancel', async (req, res) => {
   try {
-    const { calendarId, code, eventId } = req.body; // requiere calendarId y (code o eventId)
-    if (!calendarId || (!code && !eventId)) {
+    const { calendarId, code } = req.body; // solo calendarId y code
+    if (!calendarId || !code) {
       return res.status(400).json({ ok: false, error: 'missing_fields' });
     }
 
-    const auth = getOAuth2Client(); await ensureAuthed(auth);
+    const auth = getOAuth2Client(); 
+    await ensureAuthed(auth);
     const cal = calendarClient(auth);
 
-    // Si ya viene eventId lo usamos; si no, buscamos por "Code: <code>" (o por el texto del code) en ±1 año
-    let targetId = eventId || null;
+    // Buscar evento que contenga el código en ±1 año
+    const timeMin = dayjs().subtract(1, 'year').toISOString();
+    const timeMax = dayjs().add(1, 'year').toISOString();
 
-    if (!targetId && code) {
-      const timeMin = dayjs().subtract(1, 'year').toISOString();
-      const timeMax = dayjs().add(1, 'year').toISOString();
+    const r = await cal.events.list({
+      calendarId,
+      q: code,
+      timeMin,
+      timeMax,
+      singleEvents: true,
+      maxResults: 2500,
+      orderBy: 'startTime'
+    });
 
-      const r = await cal.events.list({
-        calendarId,
-        q: code,
-        timeMin,
-        timeMax,
-        singleEvents: true,
-        maxResults: 2500,
-        orderBy: 'startTime'
-      });
+    const items = r.data.items || [];
+    const match = items.find(ev => {
+      const has = s => typeof s === 'string' && s.includes(code);
+      return has(ev.description) || has(ev.summary);
+    });
 
-      const items = r.data.items || [];
-      const match = items.find(ev => {
-        const has = s => typeof s === 'string' && s.includes(code);
-        return has(ev.description) || has(ev.summary);
-      });
-
-      if (match) targetId = match.id;
+    if (!match) {
+      return res.status(404).json({ ok: false, error: 'not_found' });
     }
 
-    if (!targetId) return res.status(404).json({ ok: false, error: 'not_found' });
-
-    await cal.events.delete({ calendarId, eventId: targetId });
-    return res.json({ ok: true, eventId: targetId });
+    await cal.events.delete({ calendarId, eventId: match.id });
+    return res.json({ ok: true, eventId: match.id });
   } catch (e) {
     console.error(e);
     return res.status(500).json({ ok: false, error: 'cancel_failed' });
