@@ -219,5 +219,50 @@ app.post('/book', async (req, res) => {
     res.status(500).json({ ok: false, error: 'booking_failed' });
   }
 });
+// Cancelar cita por código (o eventId)
+app.post('/cancel', async (req, res) => {
+  try {
+    const { calendarId, code, eventId } = req.body; // requiere calendarId y (code o eventId)
+    if (!calendarId || (!code && !eventId)) {
+      return res.status(400).json({ ok: false, error: 'missing_fields' });
+    }
 
+    const auth = getOAuth2Client(); await ensureAuthed(auth);
+    const cal = calendarClient(auth);
+
+    // Si ya viene eventId lo usamos; si no, buscamos por "Code: <code>" (o por el texto del code) en ±1 año
+    let targetId = eventId || null;
+
+    if (!targetId && code) {
+      const timeMin = dayjs().subtract(1, 'year').toISOString();
+      const timeMax = dayjs().add(1, 'year').toISOString();
+
+      const r = await cal.events.list({
+        calendarId,
+        q: code,
+        timeMin,
+        timeMax,
+        singleEvents: true,
+        maxResults: 2500,
+        orderBy: 'startTime'
+      });
+
+      const items = r.data.items || [];
+      const match = items.find(ev => {
+        const has = s => typeof s === 'string' && s.includes(code);
+        return has(ev.description) || has(ev.summary);
+      });
+
+      if (match) targetId = match.id;
+    }
+
+    if (!targetId) return res.status(404).json({ ok: false, error: 'not_found' });
+
+    await cal.events.delete({ calendarId, eventId: targetId });
+    return res.json({ ok: true, eventId: targetId });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ ok: false, error: 'cancel_failed' });
+  }
+});
 app.listen(PORT, () => console.log(`API listening on :${PORT}`));
